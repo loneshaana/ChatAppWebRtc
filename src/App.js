@@ -14,7 +14,7 @@ function makeid(length) {
 function App({ username }) {
   return (
     <div className="App">
-      welcome {username}
+      welcome Random User <b>{username}</b>
       <header className="App-header"></header>
     </div>
   );
@@ -28,8 +28,15 @@ class WebsocketConnectivity {
 
   subscribers = {
     ACTIVE_USERS: [],
+    RECEIVED_MESSAGES: {},
   };
 
+  subscribeMessages(type, callback) {
+    if (!this.subscribers.RECEIVED_MESSAGES[type]) {
+      this.subscribers.RECEIVED_MESSAGES[type] = [];
+    }
+    this.subscribers.RECEIVED_MESSAGES[type].push(callback);
+  }
   subscribe(type, callback) {
     this.subscribers[type].push(callback);
   }
@@ -64,12 +71,12 @@ class WebsocketConnectivity {
             break;
 
           case "MESSAGE_SET_REMOTE_ICE_CONNECTION":
-            console.log(msg)
+            console.log(msg);
             const answer = msg.iceCandidate;
             const dataChannel = that.dataChannels[msg.receiver];
             const rpcConnection = that.rpcConnections[msg.receiver];
-            console.log({dataChannel},{rpcConnection});
-            if(rpcConnection.signalingState !== 'stable'){
+            console.log({ dataChannel }, { rpcConnection });
+            if (rpcConnection.signalingState !== "stable") {
               rpcConnection.setRemoteDescription(answer);
               console.log("Set Remote Description");
             }
@@ -95,8 +102,17 @@ class WebsocketConnectivity {
             remoteConnection.ondatachannel = (e) => {
               console.log(e);
               const receiveChannel = e.channel;
-              receiveChannel.onmessage = (e) =>
-                console.log("messsage received!!!" + e.data , e);
+              receiveChannel.onmessage = (e) => {
+                const target = e.target.label;
+                const receivedSubscribers =
+                  that.subscribers["RECEIVED_MESSAGES"][target];
+                if (receivedSubscribers && receivedSubscribers.length > 0) {
+                  for (const subs of receivedSubscribers) {
+                    subs(e);
+                  }
+                }
+              };
+
               receiveChannel.onopen = (e) => console.log("open!!!!");
               receiveChannel.onclose = (e) => console.log("closed!!!!!!");
               remoteConnection.channel = receiveChannel;
@@ -137,7 +153,7 @@ class WebsocketConnectivity {
     };
     this.send(JSON.stringify(data));
   }
-  
+
   send(data) {
     if (
       WebsocketConnectivity.connection &&
@@ -174,6 +190,7 @@ const socket = new WebsocketConnectivity();
 class Message extends React.Component {
   state = {
     message: "",
+    connectionInitiated:false
   };
 
   onMessageChange = ({ target: { value } }) => {
@@ -210,33 +227,117 @@ class Message extends React.Component {
         .then((a) => console.log("Set Successfully!"));
       socket.rpcConnections[myUsername] = localConnection;
       socket.dataChannels[myUsername] = sendChannel;
+      this.setState({connectionInitiated: !this.state.connectionInitiated})
     }
-
   };
 
-  sendMessage = () =>{
-    const{message} = this.state;
-    const {myUsername} = this.props;
+  sendMessage = () => {
+    const { message } = this.state;
+    const { myUsername } = this.props;
     const channel = socket.dataChannels[myUsername];
     channel.send(message);
-  }
+  };
 
   render() {
-    const { friendUsername } = this.props;
+    const { friendUsername, history } = this.props;
+    const{connectionInitiated} = this.state;
+    console.log({ history });
     return (
-      <div style={{ display: "flex" }}>
-        <strong> Send Message To {friendUsername} </strong>
+      <div style={{ top: "20%", left: "30%", transform: "translate(20%,20%)" }}>
+        <div>
+          <strong> Send Message To {friendUsername} </strong>
+        </div>
         <textarea
+          disabled
+          style={{ height: 350, width: 450, overflow: "scroll" }}
+          value={history}
+        />
+        <br />
+        <input
+          style={{ width: 450 }}
           onChange={this.onMessageChange}
           value={this.state.message}
-        ></textarea>
-        <button onClick={this.sendMessage}>Send</button>
-        <button onClick={this.initiateConnection}>InitiateConnection</button>
+        />
+        {!connectionInitiated && (
+          <button onClick={this.initiateConnection}>InitiateConnection</button>
+        )}
+        {connectionInitiated && (
+          <button onClick={this.sendMessage}>Send</button>
+        )}
       </div>
     );
   }
 }
 
+class User extends React.Component {
+  state = {
+    currentReceiverUser: null,
+    messagesReceived: {},
+  };
+
+
+  componentDidMount() {
+    const { user } = this.props;
+    if (user) {
+      socket.subscribeMessages(user, (e) => {
+        console.log(
+          "User Received data in subscriber from ",
+          e.target.label,
+          " message ",
+          e.data
+        );
+        this.setState((prevState) => {
+          if (prevState.messagesReceived[e.target.label]) {
+            return {
+              ...prevState,
+              messagesReceived: {
+                ...prevState.messagesReceived,
+                [e.target.label]: [
+                  ...prevState.messagesReceived[e.target.label],
+                  `${e.data}\n`,
+                ],
+              },
+            };
+          } else {
+            return {
+              ...prevState,
+              messagesReceived: {
+                ...prevState.messagesReceived,
+                [e.target.label]: [`${e.data}\n`],
+              },
+            };
+          }
+        });
+      });
+    }
+  }
+  setCurrentUser = (value) => {
+    this.setState({ currentReceiverUser: value });
+  };
+  render() {
+    const { user } = this.props;
+    if (user === this.props.username) return <span />;
+    return (
+      <>
+        <p
+          key={this.props.key}
+          style={{ margin: 2, padding: 2, color: "green" }}
+          onClick={() => {
+            this.setCurrentUser(user);
+          }}
+        >
+          {user}
+        </p>
+        <Message
+          // friendUsername={this.state.currentReceiverUser}
+          friendUsername={user}
+          myUsername={this.props.username}
+          history={this.state.messagesReceived[user]}
+        />
+      </>
+    );
+  }
+}
 class ActiveUser extends React.Component {
   state = {
     activeUsers: [],
@@ -263,16 +364,20 @@ class ActiveUser extends React.Component {
   }
 
   render() {
-    const activeUsers = this.state.activeUsers;
+    const { activeUsers } = this.state;
     if (!activeUsers || activeUsers.length === 0)
       return <div> No Active Users</div>;
 
     const UserDisplay = activeUsers.map((user, index) => (
-      <div key={index} style={{ display: "inline" }}>
-        <Message friendUsername={user} myUsername={this.props.username} />
-      </div>
+      <User
+        user={user}
+        username={this.props.username}
+        key={index}
+        setCurrentUser={this.props.setCurrentUser}
+      />
     ));
-    return UserDisplay;
+
+    return <span>{UserDisplay}</span>;
   }
 }
 
@@ -287,13 +392,47 @@ class ChatApp extends React.Component {
     this.setState({ username });
   }
 
+  randomCall() {
+    const videoEle = document.querySelector("local-video");
+  }
+
   render() {
     const { username } = this.state;
     return (
       <div>
         <App username={username} />
         <hr />
-        {username.length === 6 && <ActiveUser username={username} />}
+        {username.length === 6 && (
+          <ActiveUser
+            username={username}
+            setCurrentUser={this.setCurrentUser}
+          />
+        )}
+        {/* {currentReceiverUser && ( */}
+        {/* )} */}
+        {/* <div style={{display:"flex",marginLeft:"350px"}}>
+          <VideoPlayer id="local-video"/>
+          <VideoPlayer id="receiver-video"/>
+        </div>
+        <button onClick={this.randomCall}> Random call</button> */}
+      </div>
+    );
+  }
+}
+
+class VideoPlayer extends React.Component {
+  render() {
+    return (
+      <div
+        style={{
+          margin: 15,
+          padding: 15,
+          height: "400px",
+          width: "350px",
+          background: "green",
+        }}
+      >
+        <video id={this.props.id} />
       </div>
     );
   }

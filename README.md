@@ -7,5 +7,5 @@ In the project directory, you can run:
 ### `npm start`
     This will spin up the react UI
 
-### `npm start-server`
+### `npm run start-server`
     This will spin up the nodejs backend

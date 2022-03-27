@@ -37,6 +37,7 @@ class WebsocketConnectivity {
     }
     this.subscribers.RECEIVED_MESSAGES[type].push(callback);
   }
+
   subscribe(type, callback) {
     this.subscribers[type].push(callback);
   }
@@ -73,8 +74,8 @@ class WebsocketConnectivity {
           case "MESSAGE_SET_REMOTE_ICE_CONNECTION":
             console.log(msg);
             const answer = msg.iceCandidate;
-            const dataChannel = that.dataChannels[msg.receiver];
-            const rpcConnection = that.rpcConnections[msg.receiver];
+            const dataChannel = that.dataChannels[msg.sender];
+            const rpcConnection = that.rpcConnections[msg.sender];
             console.log({ dataChannel }, { rpcConnection });
             if (rpcConnection.signalingState !== "stable") {
               rpcConnection.setRemoteDescription(answer);
@@ -103,9 +104,9 @@ class WebsocketConnectivity {
               console.log(e);
               const receiveChannel = e.channel;
               receiveChannel.onmessage = (e) => {
-                const target = e.target.label;
+                const data = JSON.parse(e.data);
                 const receivedSubscribers =
-                  that.subscribers["RECEIVED_MESSAGES"][target];
+                  that.subscribers["RECEIVED_MESSAGES"][data.from];
                 if (receivedSubscribers && receivedSubscribers.length > 0) {
                   for (const subs of receivedSubscribers) {
                     subs(e);
@@ -190,7 +191,7 @@ const socket = new WebsocketConnectivity();
 class Message extends React.Component {
   state = {
     message: "",
-    connectionInitiated:false
+    connectionInitiated: false,
   };
 
   onMessageChange = ({ target: { value } }) => {
@@ -216,7 +217,7 @@ class Message extends React.Component {
           myUsername
         );
       };
-      const sendChannel = localConnection.createDataChannel(myUsername);
+      const sendChannel = localConnection.createDataChannel(friendUsername);
       sendChannel.onmessage = (e) =>
         console.log("messsage received!!!" + e.data);
       sendChannel.onopen = (e) => console.log("open!!!!");
@@ -225,23 +226,30 @@ class Message extends React.Component {
         .createOffer()
         .then((o) => localConnection.setLocalDescription(o))
         .then((a) => console.log("Set Successfully!"));
-      socket.rpcConnections[myUsername] = localConnection;
-      socket.dataChannels[myUsername] = sendChannel;
-      this.setState({connectionInitiated: !this.state.connectionInitiated})
+      socket.rpcConnections[friendUsername] = localConnection;
+      socket.dataChannels[friendUsername] = sendChannel;
+      this.setState({ connectionInitiated: !this.state.connectionInitiated });
     }
   };
 
   sendMessage = () => {
     const { message } = this.state;
-    const { myUsername } = this.props;
-    const channel = socket.dataChannels[myUsername];
-    channel.send(message);
+    const { friendUsername, myUsername } = this.props;
+    const channel = socket.dataChannels[friendUsername];
+    channel.send(
+      JSON.stringify({
+        message,
+        from: myUsername,
+        to: friendUsername,
+      })
+    );
   };
 
   render() {
-    const { friendUsername, history } = this.props;
-    const{connectionInitiated} = this.state;
-    console.log({ history });
+    const { friendUsername, history,messagesReceived,myUsername } = this.props;
+    const { connectionInitiated } = this.state;
+    console.log(messagesReceived);
+    console.log("FriendUsernmae " ,friendUsername , "MY username " , myUsername);
     return (
       <div style={{ top: "20%", left: "30%", transform: "translate(20%,20%)" }}>
         <div>
@@ -271,30 +279,26 @@ class Message extends React.Component {
 
 class User extends React.Component {
   state = {
-    currentReceiverUser: null,
     messagesReceived: {},
   };
-
 
   componentDidMount() {
     const { user } = this.props;
     if (user) {
       socket.subscribeMessages(user, (e) => {
-        console.log(
-          "User Received data in subscriber from ",
-          e.target.label,
-          " message ",
-          e.data
-        );
+        console.log("User Received data in subscriber from ", " message ", e);
+        const data = JSON.parse(e.data);
+        const {message ,from} = data;
+        console.log(message , from)
         this.setState((prevState) => {
-          if (prevState.messagesReceived[e.target.label]) {
+          if (prevState.messagesReceived[from]) {
             return {
               ...prevState,
               messagesReceived: {
                 ...prevState.messagesReceived,
-                [e.target.label]: [
-                  ...prevState.messagesReceived[e.target.label],
-                  `${e.data}\n`,
+                [from]: [
+                  ...prevState.messagesReceived[from],
+                  `${message}\n`
                 ],
               },
             };
@@ -303,7 +307,7 @@ class User extends React.Component {
               ...prevState,
               messagesReceived: {
                 ...prevState.messagesReceived,
-                [e.target.label]: [`${e.data}\n`],
+                [from]: [`${message}\n`]
               },
             };
           }
@@ -312,15 +316,15 @@ class User extends React.Component {
     }
   }
   setCurrentUser = (value) => {
-    this.setState({ currentReceiverUser: value });
+    // this.setState({ currentReceiverUser: value });
   };
   render() {
-    const { user } = this.props;
+    const { user,key } = this.props;
     if (user === this.props.username) return <span />;
     return (
       <>
         <p
-          key={this.props.key}
+          key={key}
           style={{ margin: 2, padding: 2, color: "green" }}
           onClick={() => {
             this.setCurrentUser(user);
@@ -329,10 +333,10 @@ class User extends React.Component {
           {user}
         </p>
         <Message
-          // friendUsername={this.state.currentReceiverUser}
           friendUsername={user}
           myUsername={this.props.username}
           history={this.state.messagesReceived[user]}
+          messagesReceived={this.state.messagesReceived}
         />
       </>
     );
@@ -408,7 +412,6 @@ class ChatApp extends React.Component {
             setCurrentUser={this.setCurrentUser}
           />
         )}
-        {/* {currentReceiverUser && ( */}
         {/* )} */}
         {/* <div style={{display:"flex",marginLeft:"350px"}}>
           <VideoPlayer id="local-video"/>
